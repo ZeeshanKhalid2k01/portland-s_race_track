@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Map Visualization with Editable Zones</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+    <link rel="stylesheet" href="https://unpkg.com/leaflet-draw/dist/leaflet.draw.css"/>
+    <style>
+        body {
+            display: flex;
+            font-family: Arial, sans-serif;
+        }
+        #sidebar {
+            width: 25%;
+            padding: 20px;
+            background-color: #f4f4f4;
+        }
+        #map-container {
+            width: 75%;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+        #map {
+            width: 90%;
+            height: 600px;
+            border: 1px solid #ccc;
+        }
+        .zone-item {
+            display: flex;
+            justify-content: space-between;
+            padding: 5px;
+            background-color: #f9f9f9;
+            margin: 5px 0;
+            border-radius: 5px;
+        }
+        .zone-item button {
+            background-color: red;
+            color: white;
+            border: none;
+            cursor: pointer;
+        }
+    </style>
+</head>
+<body>
+    <div id="sidebar">
+        <h2>Map Controls</h2>
+        <p>Use the map to draw or edit camera zones.</p>
+        <button id="save-zones">Save Zones</button>
+        <h3>Saved Zones</h3>
+        <div id="saved-zones"></div>
+        <div id="output"></div>
+    </div>
+    
+    <div id="map-container">
+        <div id="map"></div>
+    </div>
+
+    <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+    <script src="https://unpkg.com/leaflet-draw/dist/leaflet.draw.js"></script>
+    <script>
+        var map = L.map('map').setView([45.5957071, -122.6970419], 14);
+
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            maxZoom: 19,
+        }).addTo(map);
+
+        // Initialize FeatureGroup to store editable layers
+        var editableLayers = new L.FeatureGroup();
+        map.addLayer(editableLayers);
+
+        // Define draw control options
+        var drawControl = new L.Control.Draw({
+            edit: {
+                featureGroup: editableLayers
+            },
+            draw: {
+                polygon: true,
+                polyline: false,
+                rectangle: true,
+                circle: false,
+                marker: false,
+                circlemarker: false
+            }
+        });
+        map.addControl(drawControl);
+
+        // Load initial camera zones
+        var trackPolygon = L.polygon({{ track_polygon_coords|tojson }}, {color: 'blue'}).addTo(editableLayers);
+        var camera1Polygon = L.polygon({{ camera_1_fence_coords|tojson }}, {color: 'red'}).addTo(editableLayers);
+        var camera2Polygon = L.polygon({{ camera_2_fence_coords|tojson }}, {color: 'green'}).addTo(editableLayers);
+
+        // Event handler for creating new shapes
+        map.on(L.Draw.Event.CREATED, function (event) {
+            var layer = event.layer;
+            editableLayers.addLayer(layer);
+        });
+
+        // Event handler for saving the zones
+        document.getElementById('save-zones').onclick = function() {
+            var data = [];
+            editableLayers.eachLayer(function(layer) {
+                if (layer instanceof L.Polygon) {
+                    data.push(layer.getLatLngs());
+                }
+            });
+
+            // Send the data to the server
+            fetch('/save_zones', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({zones: data}),
+            }).then(response => response.json()).then(data => {
+                console.log('Success:', data);
+                document.getElementById('output').innerHTML = `Zones saved! File created at: ${data.file}`;
+                loadSavedZones();  // Reload the saved zones after saving
+            }).catch((error) => {
+                console.error('Error:', error);
+            });
+        };
+
+        // Function to load saved zones and display them in the sidebar
+        function loadSavedZones() {
+            fetch('/get_saved_zones')
+                .then(response => response.json())
+                .then(data => {
+                    const savedZonesDiv = document.getElementById('saved-zones');
+                    savedZonesDiv.innerHTML = '';
+                    data.files.forEach(file => {
+                        const zoneItem = document.createElement('div');
+                        zoneItem.className = 'zone-item';
+
+                        const zoneLabel = document.createElement('span');
+                        zoneLabel.textContent = file;
+                        
+                        const loadBtn = document.createElement('button');
+                        loadBtn.textContent = 'Load';
+                        loadBtn.onclick = () => loadZone(file);
+
+                        const deleteBtn = document.createElement('button');
+                        deleteBtn.textContent = 'Delete';
+                        deleteBtn.onclick = () => deleteZone(file);
+
+                        zoneItem.appendChild(zoneLabel);
+                        zoneItem.appendChild(loadBtn);
+                        zoneItem.appendChild(deleteBtn);
+
+                        savedZonesDiv.appendChild(zoneItem);
+                    });
+                })
+                .catch(error => console.error('Error loading saved zones:', error));
+        }
+
+        // Function to load a specific zone file and display it on the map
+        function loadZone(file) {
+            fetch(`/load_zone/${file}`)
+                .then(response => response.json())
+                .then(data => {
+                    if (data.error) {
+                        document.getElementById('output').innerHTML = `Error loading zone: ${data.error}`;
+                        return;
+                    }
+
+                    // Clear the existing layers
+                    editableLayers.clearLayers();
+
+                    // Add the loaded zones to the map
+                    data.zones.forEach(zone => {
+                        const polygon = L.polygon(zone, {color: 'blue'});
+                        editableLayers.addLayer(polygon);
+                    });
+
+                    document.getElementById('output').innerHTML = `Zone ${file} loaded.`;
+                })
+                .catch(error => console.error('Error loading zone:', error));
+        }
+
+        // Function to delete a saved zone file
+        function deleteZone(file) {
+            if (!confirm(`Are you sure you want to delete ${file}?`)) return;
+
+            fetch(`/delete_zone/${file}`, {
+                method: 'DELETE',
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    document.getElementById('output').innerHTML = `Zone ${file} deleted successfully.`;
+                    loadSavedZones();  // Reload the list of saved zones
+                } else {
+                    document.getElementById('output').innerHTML = `Error deleting zone: ${data.error}`;
+                }
+            })
+            .catch(error => console.error('Error deleting zone:', error));
+        }
+
+        // Load the saved zones when the page loads
+        loadSavedZones();
+    </script>
+</body>
+</html>

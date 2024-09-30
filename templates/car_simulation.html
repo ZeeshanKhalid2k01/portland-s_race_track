@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Car Movement Simulation with Stacking Notifications</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+    <style>
+        #map {
+            width: 100%;
+            height: 600px;
+        }
+
+        .notification {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            background-color: #4caf50;
+            color: white;
+            font-weight: bold;
+            padding: 10px;
+            margin-top: 10px;
+            z-index: 9999;
+            border-radius: 4px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.3);
+        }
+
+        .notification-container {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            display: flex;
+            flex-direction: column-reverse;
+        }
+    </style>
+</head>
+<body>
+    <h2>Car Movement Simulation with Timestamps and Stacking Notifications</h2>
+    <div id="map"></div>
+    <div id="notification-container" class="notification-container"></div>
+
+    <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+    <script>
+        // Initialize the map
+        var map = L.map('map').setView([45.595, -122.690], 14);
+
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            maxZoom: 19,
+        }).addTo(map);
+
+        // Load track and camera boundaries
+        var trackPolygon = L.polygon({{ track_polygon_coords|tojson }}, {color: 'blue'}).addTo(map);
+        var camera1Polygon = L.polygon({{ camera_1_fence_coords|tojson }}, {color: 'red'}).addTo(map);
+        var camera2Polygon = L.polygon({{ camera_2_fence_coords|tojson }}, {color: 'green'}).addTo(map);
+
+        // Convert UTC timestamp to San Francisco time
+        function formatTimeInSanFrancisco(timestamp) {
+            const date = new Date(timestamp * 1000);  // Convert UNIX timestamp to JavaScript Date
+            return date.toLocaleString('en-US', {
+                timeZone: 'America/Los_Angeles',  // San Francisco Time Zone
+                hour: '2-digit',
+                minute: '2-digit',
+                second: '2-digit',
+            });
+        }
+
+        // Function to create and show notification
+        function showNotification(message) {
+            const notificationContainer = document.getElementById('notification-container');
+            const notificationElement = document.createElement('div');
+            notificationElement.classList.add('notification');
+            notificationElement.innerHTML = message;
+
+            // Append new notification to the notification container
+            notificationContainer.appendChild(notificationElement);
+
+            // Automatically remove the notification after 5 seconds
+            setTimeout(() => {
+                notificationElement.remove();
+            }, 5000);  // 5 seconds
+        }
+
+        // Function to check if car is inside a camera zone
+        function isCarInsideZone(carCoords, cameraPolygon) {
+            return cameraPolygon.getBounds().contains(L.latLng(carCoords[0], carCoords[1]));
+        }
+
+        // Function to simulate car movement with tooltips and notifications
+        function simulateCarMovement(carCoords) {
+            var carMarker = L.marker([carCoords[0][0], carCoords[0][1]], {
+                icon: L.icon({
+                    iconUrl: 'https://cdn-icons-png.flaticon.com/512/684/684908.png',
+                    iconSize: [32, 32],
+                })
+            }).addTo(map);
+
+            // Set an initial tooltip with the first timestamp converted to San Francisco time
+            carMarker.bindTooltip(`Time: ${formatTimeInSanFrancisco(carCoords[0][2])}`, {
+                permanent: true,
+                direction: 'top',
+                offset: [0, -20],
+                className: 'car-tooltip'
+            }).openTooltip();
+
+            let index = 0;
+            let totalCoords = carCoords.length;
+            let intervalTime = (10 * 1000) / totalCoords;  // 10 seconds for the entire animation
+
+            function moveCar() {
+                if (index < totalCoords - 1) {
+                    index++;
+                    // Update the car position
+                    carMarker.setLatLng([carCoords[index][0], carCoords[index][1]]);
+
+                    // Update the tooltip with the new San Francisco timestamp
+                    carMarker.setTooltipContent(`Time: ${formatTimeInSanFrancisco(carCoords[index][2])}`);
+
+                    // Check if the car is inside camera 1
+                    if (isCarInsideZone([carCoords[index][0], carCoords[index][1]], camera1Polygon)) {
+                        const message = `car_01 found in camera_1 at ${formatTimeInSanFrancisco(carCoords[index][2])}`;
+                        showNotification(message);
+                    }
+
+                    // Check if the car is inside camera 2
+                    if (isCarInsideZone([carCoords[index][0], carCoords[index][1]], camera2Polygon)) {
+                        const message = `car_01 found in camera_2 at ${formatTimeInSanFrancisco(carCoords[index][2])}`;
+                        showNotification(message);
+                    }
+                } else {
+                    clearInterval(carMovement);
+                }
+            }
+
+            let carMovement = setInterval(moveCar, intervalTime);  // Move the car every intervalTime milliseconds
+        }
+
+        // Fetch car_01 movement data from the server
+        fetch('/api/car_01_movement_data')
+            .then(response => response.json())
+            .then(data => {
+                simulateCarMovement(data);  // Start simulation
+            });
+    </script>
+</body>
+</html>
